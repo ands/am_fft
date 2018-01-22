@@ -31,34 +31,36 @@ SOFTWARE.
 // NOTE: This library is currently limited to FFTs with power-of-two sizes and, in case of 2D dfts, a square shape.
 
 
-// The complex type:
+// The complex type { real, imaginary }:
 typedef float am_fft_complex_t[2];
 
-
-// Plans (hold precomputed data to re-process data with the same layout):
+// Plans (holds precomputed coefficients to quickly re-process data with the same layout):
 typedef struct
 {
 	float *cos_table;
 	float *sin_table;
 	unsigned int levels;
 	unsigned int n;
+} am_fft_plan_1d_t;
+
+typedef struct
+{
+	am_fft_plan_1d_t *x;
+	am_fft_plan_1d_t *y;
 	am_fft_complex_t *tmp;
-} am_fft_plan_t;
-
-
-// Precomputation interface:
-am_fft_plan_t* am_fft_plan(unsigned int n);
-void am_fft_plan_free(am_fft_plan_t *plan);
-
+} am_fft_plan_2d_t;
 
 #define AM_FFT_FORWARD 0
 #define AM_FFT_INVERSE 1
 
+// Functions:
+am_fft_plan_1d_t* am_fft_plan_1d(unsigned int n);
+void              am_fft_plan_1d_free(am_fft_plan_1d_t *plan);
+void              am_fft_1d(const am_fft_plan_1d_t *plan, int direction, const am_fft_complex_t *in, am_fft_complex_t *out);
 
-// FFT interface:
-void am_fft_1d(const am_fft_plan_t *plan, int direction, const am_fft_complex_t *in, am_fft_complex_t *out);
-void am_fft_2d(const am_fft_plan_t *plan, int direction, const am_fft_complex_t *in, am_fft_complex_t *out);
-
+am_fft_plan_2d_t* am_fft_plan_2d(unsigned int width, unsigned int height);
+void              am_fft_plan_2d_free(am_fft_plan_2d_t *plan);
+void              am_fft_2d(const am_fft_plan_2d_t *plan, int direction, const am_fft_complex_t *in, am_fft_complex_t *out);
 
 #endif
 
@@ -72,7 +74,7 @@ void am_fft_2d(const am_fft_plan_t *plan, int direction, const am_fft_complex_t 
 #define AM_FFT_FREE free
 #endif
 
-am_fft_plan_t* am_fft_plan(unsigned int n)
+am_fft_plan_1d_t* am_fft_plan_1d(unsigned int n)
 {
 	unsigned int levels = 0;
 	for (unsigned int temp = n; temp > 1; temp >>= 1)
@@ -80,7 +82,7 @@ am_fft_plan_t* am_fft_plan(unsigned int n)
 	if (1U << levels != n)
 		return 0;
 	
-	am_fft_plan_t *plan = (am_fft_plan_t*)AM_FFT_ALLOC(sizeof(am_fft_plan_t));
+	am_fft_plan_1d_t *plan = (am_fft_plan_1d_t*)AM_FFT_ALLOC(sizeof(am_fft_plan_1d_t));
 	plan->cos_table = (float*)AM_FFT_ALLOC(n * sizeof(float));
 	plan->sin_table = plan->cos_table + n / 2;
 	plan->levels = levels;
@@ -93,19 +95,16 @@ am_fft_plan_t* am_fft_plan(unsigned int n)
 		plan->sin_table[i] = (float)sin(angle);
 	}
 	
-	plan->tmp = (am_fft_complex_t*)AM_FFT_ALLOC(sizeof(am_fft_complex_t) * n * n);
-	
 	return plan;
 }
 
-void am_fft_plan_free(am_fft_plan_t *plan)
+void am_fft_plan_1d_free(am_fft_plan_1d_t *plan)
 {
 	AM_FFT_FREE(plan->cos_table);
-	AM_FFT_FREE(plan->tmp);
 	AM_FFT_FREE(plan);
 }
 
-void am_fft_1d(const am_fft_plan_t *plan, int direction, const am_fft_complex_t *in, am_fft_complex_t *out)
+void am_fft_1d(const am_fft_plan_1d_t *plan, int direction, const am_fft_complex_t *in, am_fft_complex_t *out)
 {
 	// Twiddle inputs:
 	unsigned int n = plan->n;
@@ -169,31 +168,56 @@ void am_fft_1d(const am_fft_plan_t *plan, int direction, const am_fft_complex_t 
 	}
 }
 
-void am_fft_2d(const am_fft_plan_t *plan, int direction, const am_fft_complex_t *in, am_fft_complex_t *out)
+am_fft_plan_2d_t* am_fft_plan_2d(unsigned int width, unsigned int height)
 {
-	unsigned int n = plan->n;
+	am_fft_plan_2d_t *plan = (am_fft_plan_2d_t*)AM_FFT_ALLOC(sizeof(am_fft_plan_2d_t));
+	plan->x = am_fft_plan_1d(width);
+	plan->y = am_fft_plan_1d(height);
+	plan->tmp = (am_fft_complex_t*)AM_FFT_ALLOC(sizeof(am_fft_complex_t) * width * height);
+	return plan;
+}
+
+void am_fft_plan_2d_free(am_fft_plan_2d_t *plan)
+{
+	am_fft_plan_1d_free(plan->x);
+	am_fft_plan_1d_free(plan->y);
+	AM_FFT_FREE(plan->tmp);
+	AM_FFT_FREE(plan);
+}
+
+void am_fft_2d(const am_fft_plan_2d_t *plan, int direction, const am_fft_complex_t *in, am_fft_complex_t *out)
+{
 	am_fft_complex_t *tmp = plan->tmp;
 	const am_fft_complex_t *ins[2] = { in, tmp };
 	am_fft_complex_t *outs[2] = { tmp, out };
+	am_fft_plan_1d_t *plans[2] = { plan->x, plan->y };
 	
 	for (unsigned int i = 0; i < 2; i++)
 	{
 		const am_fft_complex_t *current_in = ins[i];
 		am_fft_complex_t *current_out = outs[i];
+		unsigned int n = plans[i]->n;
 
 		for (unsigned int y = 0; y < n; y++)
-			am_fft_1d(plan, direction, current_in + y * n, current_out + y * n);
+			am_fft_1d(plans[i], direction, current_in + y * n, current_out + y * n);
 
-		for (unsigned int y = 0; y < n; y++)
+		if (plans[0]->n == plans[1]->n)
 		{
-			for (unsigned int x = 0; x < y; x++)
+			for (unsigned int y = 0; y < n; y++)
 			{
-				am_fft_complex_t tmp = { current_out[y * n + x][0], current_out[y * n + x][1] };
-				current_out[y * n + x][0] = current_out[x * n + y][0];
-				current_out[y * n + x][1] = current_out[x * n + y][1];
-				current_out[x * n + y][0] = tmp[0];
-				current_out[x * n + y][1] = tmp[1];
+				for (unsigned int x = 0; x < y; x++)
+				{
+					am_fft_complex_t tmp = { current_out[y * n + x][0], current_out[y * n + x][1] };
+					current_out[y * n + x][0] = current_out[x * n + y][0];
+					current_out[y * n + x][1] = current_out[x * n + y][1];
+					current_out[x * n + y][0] = tmp[0];
+					current_out[x * n + y][1] = tmp[1];
+				}
 			}
+		}
+		else
+		{
+			// TODO: Transpose non-square matrix!
 		}
 	}
 }
