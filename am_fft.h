@@ -40,7 +40,7 @@ typedef struct
 {
 	float *cos_table;
 	float *sin_table;
-	int levels;
+	unsigned int levels;
 	unsigned int n;
 	am_fft_complex_t *tmp;
 } am_fft_plan_t;
@@ -74,10 +74,10 @@ void am_fft_2d(const am_fft_plan_t *plan, int direction, const am_fft_complex_t 
 
 am_fft_plan_t* am_fft_plan(unsigned int n)
 {
-	int levels = 0;
+	unsigned int levels = 0;
 	for (unsigned int temp = n; temp > 1; temp >>= 1)
 		levels++;
-	if (1 << levels != n)
+	if (1U << levels != n)
 		return 0;
 	
 	am_fft_plan_t *plan = (am_fft_plan_t*)AM_FFT_ALLOC(sizeof(am_fft_plan_t));
@@ -85,10 +85,10 @@ am_fft_plan_t* am_fft_plan(unsigned int n)
 	plan->sin_table = plan->cos_table + n / 2;
 	plan->levels = levels;
 	plan->n = n;
-	double PI = acos(-1);
+	double pi = acos(-1);
 	for (unsigned int i = 0; i < n / 2; i++)
 	{
-		double angle = 2.0 * PI * (double)i / (double)n;
+		double angle = 2.0 * pi * (double)i / (double)n;
 		plan->cos_table[i] = (float)cos(angle);
 		plan->sin_table[i] = (float)sin(angle);
 	}
@@ -113,7 +113,7 @@ void am_fft_1d(const am_fft_plan_t *plan, int direction, const am_fft_complex_t 
 	{
 		unsigned int j = 0;
 		unsigned int bits = i;
-		for (int l = 0; l < plan->levels; l++, bits >>= 1)
+		for (unsigned int l = 0; l < plan->levels; l++, bits >>= 1)
 			j = (j << 1) | (bits & 1);
 		out[j][0] = in[i][0];
 		out[j][1] = in[i][1];
