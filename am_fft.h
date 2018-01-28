@@ -34,7 +34,7 @@ SOFTWARE.
 // The complex type { real, imaginary }:
 typedef float am_fft_complex_t[2];
 
-// Plans (holds precomputed coefficients to quickly re-process data with the same layout):
+// Plans (hold precomputed coefficients to quickly re-process data with the same layout):
 typedef struct
 {
 	float *cos_table;
@@ -52,6 +52,7 @@ typedef struct
 	void *__pad0;
 } am_fft_plan_2d_t;
 
+// FFT directions:
 #define AM_FFT_FORWARD 0
 #define AM_FFT_INVERSE 1
 
@@ -70,6 +71,7 @@ void              am_fft_2d(const am_fft_plan_2d_t *plan, const am_fft_complex_t
 
 #ifdef AM_FFT_IMPLEMENTATION
 #include <assert.h>
+#include <math.h>
 
 #ifndef AM_FFT_ALLOC
 #include <stdlib.h>
@@ -101,7 +103,8 @@ am_fft_plan_1d_t* am_fft_plan_1d(int direction, unsigned int n)
 		plan->twiddle_table[i] = j;
 	}
 	
-	double angle_step = 2.0 * acos(-1) / (double)n * (direction == AM_FFT_FORWARD ? 1.0 : -1.0);
+	const double pi = 3.14159265358979323846; // Don't rely on M_PI being defined
+	const double angle_step = 2.0 * pi / (double)n * (direction == AM_FFT_FORWARD ? 1.0 : -1.0);
 	for (unsigned int i = 0; i < n / 2; i++)
 	{
 		double angle = (double)i * angle_step;
