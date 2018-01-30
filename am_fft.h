@@ -35,22 +35,8 @@ SOFTWARE.
 typedef float am_fft_complex_t[2];
 
 // Plans (hold precomputed coefficients to quickly re-process data with the same layout):
-typedef struct
-{
-	float *cos_table;
-	float *sin_table;
-	unsigned int *twiddle_table;
-	unsigned int n;
-	unsigned int __pad0;
-} am_fft_plan_1d_t;
-
-typedef struct
-{
-	am_fft_plan_1d_t *x;
-	am_fft_plan_1d_t *y;
-	am_fft_complex_t *tmp;
-	void *__pad0;
-} am_fft_plan_2d_t;
+typedef struct am_fft_plan_1d_ am_fft_plan_1d_t;
+typedef struct am_fft_plan_2d_ am_fft_plan_2d_t;
 
 // FFT directions:
 #define AM_FFT_FORWARD 0
@@ -78,6 +64,23 @@ void              am_fft_2d(const am_fft_plan_2d_t *plan, const am_fft_complex_t
 #define AM_FFT_ALLOC malloc
 #define AM_FFT_FREE free
 #endif
+
+struct am_fft_plan_1d_
+{
+	float *cos_table;
+	float *sin_table;
+	unsigned int *twiddle_table;
+	unsigned int n;
+	unsigned int __pad0;
+};
+
+struct am_fft_plan_2d_
+{
+	am_fft_plan_1d_t *x;
+	am_fft_plan_1d_t *y;
+	am_fft_complex_t *tmp;
+	void *__pad0;
+};
 
 am_fft_plan_1d_t* am_fft_plan_1d(int direction, unsigned int n)
 {
@@ -171,17 +174,21 @@ void am_fft_plan_2d_free(am_fft_plan_2d_t *plan)
 	AM_FFT_FREE(plan);
 }
 
-#define am_fft_block_size 16
-
-static void am_fft_transpose_square(am_fft_complex_t *m, int n)
+static void am_fft_transpose_square(am_fft_complex_t *m, unsigned int n)
 {
+#define am_fft_block_size 16
+	am_fft_complex_t block0[am_fft_block_size][am_fft_block_size];
+	am_fft_complex_t block1[am_fft_block_size][am_fft_block_size];
+	am_fft_complex_t tmp, tmp0, tmp1;
+	
 	if (n <= am_fft_block_size)
 	{
 		for (unsigned int y = 0; y < n; y++)
 		{
 			for (unsigned int x = 0; x < y; x++)
 			{
-				am_fft_complex_t tmp = { m[y * n + x][0], m[y * n + x][1] };
+				tmp[0] = m[y * n + x][0];
+				tmp[1] = m[y * n + x][1];
 				m[y * n + x][0] = m[x * n + y][0];
 				m[y * n + x][1] = m[x * n + y][1];
 				m[x * n + y][0] = tmp[0];
@@ -191,8 +198,6 @@ static void am_fft_transpose_square(am_fft_complex_t *m, int n)
 	}
 	else
 	{
-		am_fft_complex_t tmp0[am_fft_block_size][am_fft_block_size];
-		am_fft_complex_t tmp1[am_fft_block_size][am_fft_block_size];
 		for (unsigned int y = 0; y < n; y += am_fft_block_size)
 		{
 			for (unsigned int x = 0; x < y; x += am_fft_block_size)
@@ -200,31 +205,33 @@ static void am_fft_transpose_square(am_fft_complex_t *m, int n)
 				// Read 2 blocks:
 				for (unsigned int i = 0; i < am_fft_block_size; i++)
 				{
-					memcpy(tmp0[i], m[(y + i) * n + x], am_fft_block_size * sizeof(am_fft_complex_t));
-					memcpy(tmp1[i], m[(x + i) * n + y], am_fft_block_size * sizeof(am_fft_complex_t));
+					memcpy(block0[i], m[(y + i) * n + x], am_fft_block_size * sizeof(am_fft_complex_t));
+					memcpy(block1[i], m[(x + i) * n + y], am_fft_block_size * sizeof(am_fft_complex_t));
 				}
 				// Transpose blocks:
 				for (unsigned int by = 0; by < am_fft_block_size; by++)
 				{
 					for (unsigned int bx = 0; bx < by; bx++)
 					{
-						am_fft_complex_t t0 = { tmp0[by][bx][0], tmp0[by][bx][1] };
-						am_fft_complex_t t1 = { tmp1[by][bx][0], tmp1[by][bx][1] };
-						tmp0[by][bx][0] = tmp0[bx][by][0];
-						tmp0[by][bx][1] = tmp0[bx][by][1];
-						tmp1[by][bx][0] = tmp1[bx][by][0];
-						tmp1[by][bx][1] = tmp1[bx][by][1];
-						tmp0[bx][by][0] = t0[0];
-						tmp0[bx][by][1] = t0[1];
-						tmp1[bx][by][0] = t1[0];
-						tmp1[bx][by][1] = t1[1];
+						tmp0[0] = block0[by][bx][0];
+						tmp0[1] = block0[by][bx][1];
+						tmp1[0] = block1[by][bx][0];
+						tmp1[1] = block1[by][bx][1];
+						block0[by][bx][0] = block0[bx][by][0];
+						block0[by][bx][1] = block0[bx][by][1];
+						block1[by][bx][0] = block1[bx][by][0];
+						block1[by][bx][1] = block1[bx][by][1];
+						block0[bx][by][0] = tmp0[0];
+						block0[bx][by][1] = tmp0[1];
+						block1[bx][by][0] = tmp1[0];
+						block1[bx][by][1] = tmp1[1];
 					}
 				}
 				// Write swapped blocks:
 				for (unsigned int i = 0; i < am_fft_block_size; i++)
 				{
-					memcpy(m[(y + i) * n + x], tmp1[i], am_fft_block_size * sizeof(am_fft_complex_t));
-					memcpy(m[(x + i) * n + y], tmp0[i], am_fft_block_size * sizeof(am_fft_complex_t));
+					memcpy(m[(y + i) * n + x], block1[i], am_fft_block_size * sizeof(am_fft_complex_t));
+					memcpy(m[(x + i) * n + y], block0[i], am_fft_block_size * sizeof(am_fft_complex_t));
 				}
 			}
 
@@ -234,7 +241,8 @@ static void am_fft_transpose_square(am_fft_complex_t *m, int n)
 			{
 				for (unsigned int bx = 0; bx < by; bx++)
 				{
-					am_fft_complex_t tmp = { m[(y + by) * n + x + bx][0], m[(y + by) * n + x + bx][1] };
+					tmp[0] = m[(y + by) * n + x + bx][0];
+					tmp[1] = m[(y + by) * n + x + bx][1];
 					m[(y + by) * n + x + bx][0] = m[(x + bx) * n + y + by][0];
 					m[(y + by) * n + x + bx][1] = m[(x + bx) * n + y + by][1];
 					m[(x + bx) * n + y + by][0] = tmp[0];
@@ -243,28 +251,26 @@ static void am_fft_transpose_square(am_fft_complex_t *m, int n)
 			}
 		}
 	}
+#undef am_fft_block_size
 }
 
 void am_fft_2d(const am_fft_plan_2d_t *plan, const am_fft_complex_t *in, am_fft_complex_t *out)
 {
-	am_fft_complex_t *tmp = plan->tmp;
-	const am_fft_complex_t *ins[2] = { in, tmp };
-	am_fft_complex_t *outs[2] = { tmp, out };
-	am_fft_plan_1d_t *plans[2] = { plan->x, plan->y };
+	const am_fft_complex_t *ins[2];
+	am_fft_complex_t *outs[2];
+	am_fft_plan_1d_t *plans[2];
+	ins[0] =        in; outs[0] = plan->tmp; plans[0] = plan->x;
+	ins[1] = plan->tmp; outs[1] =       out; plans[1] = plan->y;
 	
 	for (unsigned int i = 0; i < 2; i++)
 	{
-		const am_fft_complex_t *current_in = ins[i];
-		am_fft_complex_t *current_out = outs[i];
 		unsigned int n = plans[i]->n;
 
 		for (unsigned int y = 0; y < n; y++)
-			am_fft_1d(plans[i], current_in + y * n, current_out + y * n);
+			am_fft_1d(plans[i], ins[i] + y * n, outs[i] + y * n);
 
 		if (plans[0]->n == plans[1]->n)
-		{
-			am_fft_transpose_square(current_out, n);
-		}
+			am_fft_transpose_square(outs[i], n);
 		else
 		{
 			// TODO: Transpose non-square matrices!
