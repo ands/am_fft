@@ -65,13 +65,17 @@ void              am_fft_2d(const am_fft_plan_2d_t *plan, const am_fft_complex_t
 #define AM_FFT_FREE free
 #endif
 
+#ifndef AM_FFT_NO_SSE2
+#include <emmintrin.h>
+#endif
+
 struct am_fft_plan_1d_
 {
 	float *cos_table;
 	float *sin_table;
 	unsigned int *twiddle_table;
 	unsigned int n;
-	unsigned int __pad0;
+	int direction;
 };
 
 struct am_fft_plan_2d_
@@ -96,6 +100,7 @@ am_fft_plan_1d_t* am_fft_plan_1d(int direction, unsigned int n)
 	plan->cos_table = (float*)(plan->twiddle_table + n);
 	plan->sin_table = plan->cos_table + n / 2;
 	plan->n = n;
+	plan->direction = direction;
 	
 	for (unsigned int i = 0; i < n; i++)
 	{
@@ -134,11 +139,104 @@ void am_fft_1d(const am_fft_plan_1d_t *plan, const am_fft_complex_t *in, am_fft_
 		out[j][0] = in[i][0];
 		out[j][1] = in[i][1];
 	}
-	
-	// Radix-2 FFT:
+
+	// First passes:
+	if (n >= 2)
+	{
+		#ifdef AM_FFT_NO_SSE2
+		for (unsigned int i = 0; i < n; i += 2)
+		{
+			float ar = out[i + 0][0];
+			float ai = out[i + 0][1];
+			float br = out[i + 1][0];
+			float bi = out[i + 1][1];
+			out[i + 0][0] = ar + br;
+			out[i + 0][1] = ai + bi;
+			out[i + 1][0] = ar - br;
+			out[i + 1][1] = ai - bi;
+		}
+		#else
+		const __m128 ppnn = _mm_setr_ps(1.0f, 1.0f, -1.0f, -1.0f);
+		for (unsigned int i = 0; i < n; i += 2)
+		{
+			__m128 aribri = _mm_loadu_ps(&out[i + 0][0]);
+			__m128 ariari = _mm_shuffle_ps(aribri, aribri, _MM_SHUFFLE(1, 0, 1, 0));
+			__m128 bribri = _mm_shuffle_ps(aribri, aribri, _MM_SHUFFLE(3, 2, 3, 2));
+			__m128 result = _mm_add_ps(ariari, _mm_mul_ps(bribri, ppnn));
+			_mm_storeu_ps(&out[i + 0][0], result);
+		}
+		#endif
+	}
+
+	if (n >= 4)
+	{
+		#ifdef AM_FFT_NO_SSE2
+		if (plan->direction == AM_FFT_FORWARD)
+		{
+			
+			for (unsigned int i = 0; i < n; i += 4)
+			{
+				float ar = out[i + 0][0];
+				float ai = out[i + 0][1];
+				float br = out[i + 1][0];
+				float bi = out[i + 1][1];
+				float cr = out[i + 2][0];
+				float ci = out[i + 2][1];
+				float dr = out[i + 3][0];
+				float di = out[i + 3][1];
+				out[i + 0][0] = ar + cr;
+				out[i + 0][1] = ai + ci;
+				out[i + 1][0] = br + di;
+				out[i + 1][1] = bi - dr;
+				out[i + 2][0] = ar - cr;
+				out[i + 2][1] = ai - ci;
+				out[i + 3][0] = br - di;
+				out[i + 3][1] = bi + dr;
+			}
+		}
+		else
+		{
+			for (unsigned int i = 0; i < n; i += 4)
+			{
+				float ar = out[i + 0][0];
+				float ai = out[i + 0][1];
+				float br = out[i + 1][0];
+				float bi = out[i + 1][1];
+				float cr = out[i + 2][0];
+				float ci = out[i + 2][1];
+				float dr = out[i + 3][0];
+				float di = out[i + 3][1];
+				out[i + 0][0] = ar + cr;
+				out[i + 0][1] = ai + ci;
+				out[i + 1][0] = br - di;
+				out[i + 1][1] = bi + dr;
+				out[i + 2][0] = ar - cr;
+				out[i + 2][1] = ai - ci;
+				out[i + 3][0] = br + di;
+				out[i + 3][1] = bi - dr;
+			}
+		}
+		#else
+		const __m128 flip = (plan->direction == AM_FFT_FORWARD) ? _mm_setr_ps(1.0f, 1.0f, 1.0f, -1.0f) : _mm_setr_ps(1.0f, 1.0f, -1.0f, 1.0f);
+		for (unsigned int i = 0; i < n; i += 4)
+		{
+			__m128 aribri = _mm_loadu_ps(&out[i + 0][0]);
+			__m128 cridri = _mm_loadu_ps(&out[i + 2][0]);
+			__m128 cridir = _mm_shuffle_ps(cridri, cridri, _MM_SHUFFLE(2, 3, 1, 0));
+			__m128 flipped = _mm_mul_ps(cridir, flip);
+			__m128 result0 = _mm_add_ps(aribri, flipped);
+			__m128 result1 = _mm_sub_ps(aribri, flipped);
+			_mm_storeu_ps(&out[i + 0][0], result0);
+			_mm_storeu_ps(&out[i + 2][0], result1);
+		}
+		#endif
+	}
+
+	// Remaining passes of the radix-2 FFT:
 	float *cos_table = plan->cos_table;
 	float *sin_table = plan->sin_table;
-	for (unsigned int half = 1; half < n; half <<= 1)
+	am_fft_complex_t c;
+	for (unsigned int half = 4; half < n; half <<= 1)
 	{
 		unsigned int size = half << 1;
 		unsigned int step = n / size;
@@ -147,11 +245,12 @@ void am_fft_1d(const am_fft_plan_1d_t *plan, const am_fft_complex_t *in, am_fft_
 			for (unsigned int j = i, k = 0; j < i + half; j++, k += step)
 			{
 				unsigned int l = j + half;
-				am_fft_complex_t c;
 				c[0] =  out[l][0] * cos_table[k] + out[l][1] * sin_table[k];
 				c[1] = -out[l][0] * sin_table[k] + out[l][1] * cos_table[k];
-				out[l][0] = out[j][0] - c[0]; out[j][0] = out[j][0] + c[0];
-				out[l][1] = out[j][1] - c[1]; out[j][1] = out[j][1] + c[1];
+				out[l][0] = out[j][0] - c[0];
+				out[l][1] = out[j][1] - c[1];
+				out[j][0] = out[j][0] + c[0];
+				out[j][1] = out[j][1] + c[1];
 			}
 		}
 	}
