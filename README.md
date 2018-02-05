@@ -12,4 +12,3 @@ This is a work in progress!
 
 ## TODO
 - Find and implement a good solution for the in-place non-square matrix transpose to get rid of the square 2D input limitation
-- Further optimization (SIMD etc.)
