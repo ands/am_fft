@@ -235,23 +235,40 @@ void am_fft_1d(const am_fft_plan_1d_t *plan, const am_fft_complex_t *in, am_fft_
 	// Remaining passes of the radix-2 FFT:
 	float *cos_table = plan->cos_table;
 	float *sin_table = plan->sin_table;
-	am_fft_complex_t c;
 	for (unsigned int half = 4; half < n; half <<= 1)
 	{
 		unsigned int size = half << 1;
 		unsigned int step = n / size;
 		for (unsigned int i = 0; i < n; i += size)
 		{
+			#ifdef AM_FFT_NO_SSE2
 			for (unsigned int j = i, k = 0; j < i + half; j++, k += step)
 			{
 				unsigned int l = j + half;
-				c[0] =  out[l][0] * cos_table[k] + out[l][1] * sin_table[k];
-				c[1] = -out[l][0] * sin_table[k] + out[l][1] * cos_table[k];
-				out[l][0] = out[j][0] - c[0];
-				out[l][1] = out[j][1] - c[1];
-				out[j][0] = out[j][0] + c[0];
-				out[j][1] = out[j][1] + c[1];
+				float ar =  out[l][0] * cos_table[k] + out[l][1] * sin_table[k];
+				float ai = -out[l][0] * sin_table[k] + out[l][1] * cos_table[k];
+				out[l][0] = out[j][0] - ar;
+				out[l][1] = out[j][1] - ai;
+				out[j][0] = out[j][0] + ar;
+				out[j][1] = out[j][1] + ai;
 			}
+			#else
+			for (unsigned int j = i, k = 0; j < i + half; j += 2, k += 2 * step)
+			{
+				unsigned int l = j + half;
+				
+				__m128 aribri = _mm_loadu_ps(&out[l][0]);
+				__m128 cridri = _mm_loadu_ps(&out[j][0]);
+				
+				__m128 airbir = _mm_shuffle_ps(aribri, aribri, _MM_SHUFFLE(2, 3, 0, 1));
+				__m128 cos0011 = _mm_setr_ps(cos_table[k], cos_table[k], cos_table[k + step], cos_table[k + step]);
+				__m128 sin0011 = _mm_setr_ps(sin_table[k], -sin_table[k], sin_table[k + step], -sin_table[k + step]);
+				__m128 aribri2 = _mm_add_ps(_mm_mul_ps(aribri, cos0011), _mm_mul_ps(airbir, sin0011));
+				
+				_mm_storeu_ps(&out[l][0], _mm_sub_ps(cridri, aribri2));
+				_mm_storeu_ps(&out[j][0], _mm_add_ps(cridri, aribri2));
+			}
+			#endif
 		}
 	}
 }
